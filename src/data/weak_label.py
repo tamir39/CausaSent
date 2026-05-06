@@ -18,8 +18,8 @@ import time
 from pathlib import Path
 
 from .label_schema import ASPECTS, SENTIMENTS
-from .schema import Annotation, Review, save_reviews
-from .span_align import find_cause_span
+from .schema import Review, save_reviews
+from .validate import ValidationStats, validate_review
 
 PROMPT = """\
 Bạn là chuyên gia phân tích review thương mại điện tử tiếng Việt.
@@ -67,39 +67,21 @@ def _call_gemini(client, prompt: str, model_name: str, max_retries: int = 3) -> 
     raise RuntimeError(f"Gemini call failed after {max_retries} retries: {last_err}")
 
 
-def label_review(client, review_id: str, review_text: str, model_name: str) -> Review | None:
+def label_review(
+    client,
+    review_id: str,
+    review_text: str,
+    model_name: str,
+    stats: ValidationStats | None = None,
+) -> Review | None:
     raw = _call_gemini(client, _build_prompt(review_text), model_name)
     try:
         items = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    anns: list[Annotation] = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        aspect = it.get("aspect")
-        sentiment = it.get("sentiment")
-        cause = it.get("cause", "")
-        action = it.get("action", "").strip()
-        if aspect not in ASPECTS or sentiment not in SENTIMENTS or not cause or not action:
-            continue
-        span = find_cause_span(review_text, cause)
-        if span is None:
-            continue
-        s, e = span
-        # Use the actual substring from the review (canonical casing).
-        cause_text = review_text[s:e]
-        try:
-            anns.append(Annotation(
-                aspect=aspect,
-                sentiment=sentiment,
-                cause_text=cause_text,
-                cause_span=(s, e),
-                action=action,
-            ))
-        except Exception:
-            continue
-    return Review(id=review_id, review=review_text, annotations=anns)
+    if not isinstance(items, list):
+        return None
+    return validate_review(review_id, review_text, items, stats=stats)
 
 
 def main() -> None:
@@ -120,12 +102,13 @@ def main() -> None:
     client = genai.GenerativeModel(args.model)
 
     reviews: list[Review] = []
+    stats = ValidationStats()
     with open(args.in_path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
             if args.limit and i >= args.limit:
                 break
             row = json.loads(line)
-            r = label_review(client, row["id"], row["review"], args.model)
+            r = label_review(client, row["id"], row["review"], args.model, stats=stats)
             if r is not None:
                 reviews.append(r)
             if (i + 1) % 25 == 0:
@@ -133,6 +116,7 @@ def main() -> None:
 
     save_reviews(reviews, args.out_path)
     print(f"[weak_label] wrote {len(reviews)} reviews → {args.out_path}")
+    print(f"[weak_label] validator stats: {stats.as_dict()}")
 
 
 if __name__ == "__main__":
