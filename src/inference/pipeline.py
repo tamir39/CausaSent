@@ -21,6 +21,7 @@ class PredictedTuple:
     cause_text: str
     cause_span: tuple[int, int]
     action: str
+    confidence: float = 1.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -35,7 +36,9 @@ class CausaSentPipeline:
         mt5_pretrained: str = "google/mt5-base",
         segmenter_kind: str = "vncorenlp",
         device: str | None = None,
+        min_confidence: float = 0.0,
     ):
+        self.min_confidence = min_confidence
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tagger_tok = PhoBertTwoHeadTagger.load_tokenizer(phobert_pretrained)
         self.tagger = PhoBertTwoHeadTagger(pretrained=phobert_pretrained)
@@ -63,14 +66,18 @@ class CausaSentPipeline:
             return_tensors="pt",
         ).to(self.device)
         out = self.tagger(enc["input_ids"], enc["attention_mask"])
-        asp_pred = out.asp_logits.argmax(-1)[0].tolist()
-        cau_pred = out.cause_logits.argmax(-1)[0].tolist()
+        asp_logits = out.asp_logits[0]
+        cau_logits = out.cause_logits[0]
+        asp_pred = asp_logits.argmax(-1).tolist()
+        cau_pred = cau_logits.argmax(-1).tolist()
+        asp_probs_sub = torch.softmax(asp_logits, dim=-1).tolist()
 
         # Reduce subword preds → word-level (take the first subword per word).
         word_ids = enc.word_ids(batch_index=0)
         n_words = len(words)
         asp_word = [0] * n_words
         cau_word = [0] * n_words
+        asp_probs_word: list[list[float]] = [[1.0]] * n_words
         seen: set[int] = set()
         for i, wid in enumerate(word_ids):
             if wid is None or wid in seen:
@@ -78,13 +85,19 @@ class CausaSentPipeline:
             seen.add(wid)
             asp_word[wid] = asp_pred[i]
             cau_word[wid] = cau_pred[i]
+            asp_probs_word[wid] = asp_probs_sub[i]
 
         w_spans = word_boundaries(review, words)
         if len(w_spans) < n_words:
             n_words = len(w_spans)
             asp_word = asp_word[:n_words]
             cau_word = cau_word[:n_words]
-        tuples = decode_to_tuples(asp_word, cau_word, w_spans, review)
+            asp_probs_word = asp_probs_word[:n_words]
+        tuples = decode_to_tuples(
+            asp_word, cau_word, w_spans, review,
+            asp_probs=asp_probs_word,
+            min_confidence=self.min_confidence,
+        )
         return tuples, w_spans
 
     def __call__(self, review: str) -> list[PredictedTuple]:
@@ -102,6 +115,7 @@ class CausaSentPipeline:
                 cause_text=t.cause_text,
                 cause_span=t.cause_span,
                 action=action,
+                confidence=t.confidence,
             ))
         return results
 

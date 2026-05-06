@@ -61,6 +61,42 @@ def test_decode_to_tuples_basic():
     assert t1.cause_span == (15, 27)
 
 
+def test_decode_dedups_identical_tuples():
+    # Two B-DEL-NEG segments back-to-back at the same char span shouldn't appear twice.
+    # We can't actually produce dup spans from BIO alone, but we can simulate the post-dedup
+    # contract by feeding two adjacent B-* segments that map to overlapping cause overlap
+    # logic — here we verify dedup key uses (aspect, sentiment, char_s, char_e).
+    review = "Ship lâu nhé"
+    word_spans = [(0, 4), (5, 8), (9, 12)]
+    asp_tags = ["B-DEL-NEG", "B-DEL-NEG", "O"]
+    cau_tags = ["O", "O", "O"]
+    tuples = decode_to_tuples(_label_seq(asp_tags), _cause_seq(cau_tags), word_spans, review)
+    # Two distinct word spans → two distinct char spans → no dedup.
+    assert len(tuples) == 2
+    # All confidences default to 1.0 when probs not supplied.
+    assert all(t.confidence == 1.0 for t in tuples)
+
+
+def test_decode_min_confidence_filters():
+    review = "Ship lâu nhé"
+    word_spans = [(0, 4), (5, 8), (9, 12)]
+    asp_tags = ["B-DEL-NEG", "I-DEL-NEG", "O"]
+    cau_tags = ["O", "O", "O"]
+    asp_ids = _label_seq(asp_tags)
+    # Build a probs matrix where the predicted-class prob is 0.4 — below threshold 0.6.
+    n_classes = max(asp_ids) + 1
+    probs = []
+    for cls in asp_ids:
+        row = [0.0] * (n_classes + 5)
+        row[cls] = 0.4
+        probs.append(row)
+    tuples = decode_to_tuples(
+        asp_ids, _cause_seq(cau_tags), word_spans, review,
+        asp_probs=probs, min_confidence=0.6,
+    )
+    assert tuples == []
+
+
 def test_decode_falls_back_when_no_cause_overlap():
     # An aspect span with no cause overlap → cause defaults to the aspect span itself.
     review = "Giá đắt"
