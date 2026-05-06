@@ -21,6 +21,8 @@ generate:
   num_beams: 4
   max_new_tokens: 32
   length_penalty: 1.0
+  no_repeat_ngram_size: 3
+  early_stopping: true
 
 output:
   ckpt_dir: checkpoints/mt5

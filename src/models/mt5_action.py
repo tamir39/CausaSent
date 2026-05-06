@@ -29,8 +29,16 @@ def generate_action(
     num_beams: int = 4,
     max_new_tokens: int = 32,
     length_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 3,
+    early_stopping: bool = True,
     device: str | None = None,
 ) -> str:
+    """Deterministic beam search.
+
+    Defaults are pinned: beam=4, no_repeat_ngram_size=3, early_stopping=True,
+    length_penalty=1.0. These are the contract used in eval and the demo —
+    override only for ablations.
+    """
     text = format_action_input(aspect, sentiment, cause, review)
     enc = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
     if device:
@@ -40,5 +48,8 @@ def generate_action(
         num_beams=num_beams,
         max_new_tokens=max_new_tokens,
         length_penalty=length_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
+        early_stopping=early_stopping,
+        do_sample=False,
     )
     return tokenizer.decode(out[0], skip_special_tokens=True).strip()
