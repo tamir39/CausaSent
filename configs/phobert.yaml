@@ -1,0 +1,26 @@
+model:
+  pretrained: vinai/phobert-large
+  dropout: 0.1
+
+data:
+  train_path: data/processed/train.json
+  val_path:   data/processed/val.json
+  test_path:  data/gold/test.json
+  max_len: 128
+  word_segmenter: vncorenlp   # vncorenlp | none
+
+train:
+  lr: 2.0e-5
+  batch_size: 16
+  epochs: 5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  optimizer: adamw
+  class_weighting: inverse_freq    # for the aspect-sentiment head
+  cause_loss_weight: 1.0           # multiplier on the cause head loss
+  grad_clip: 1.0
+  seed: 42
+
+output:
+  ckpt_dir: checkpoints/phobert
+  log_dir: runs/phobert

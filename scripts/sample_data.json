@@ -1,0 +1,49 @@
+[
+  {
+    "id": "s001",
+    "review": "Ship lâu nhưng đóng gói đẹp",
+    "annotations": [
+      {
+        "aspect": "delivery",
+        "sentiment": "negative",
+        "cause_text": "Ship lâu",
+        "cause_span": [0, 8],
+        "action": "Cải thiện tốc độ giao hàng"
+      },
+      {
+        "aspect": "packaging",
+        "sentiment": "positive",
+        "cause_text": "đóng gói đẹp",
+        "cause_span": [15, 27],
+        "action": "Giữ nguyên chất lượng đóng gói"
+      }
+    ]
+  },
+  {
+    "id": "s002",
+    "review": "Sản phẩm rất bền, giá lại hợp lý, shop tư vấn nhiệt tình.",
+    "annotations": [
+      {
+        "aspect": "product_quality",
+        "sentiment": "positive",
+        "cause_text": "Sản phẩm rất bền",
+        "cause_span": [0, 16],
+        "action": "Duy trì chất lượng sản phẩm"
+      },
+      {
+        "aspect": "price",
+        "sentiment": "positive",
+        "cause_text": "giá lại hợp lý",
+        "cause_span": [18, 32],
+        "action": "Giữ mức giá cạnh tranh"
+      },
+      {
+        "aspect": "customer_service",
+        "sentiment": "positive",
+        "cause_text": "shop tư vấn nhiệt tình",
+        "cause_span": [34, 56],
+        "action": "Tiếp tục đào tạo nhân viên tư vấn"
+      }
+    ]
+  }
+]

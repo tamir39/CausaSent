@@ -1,0 +1,42 @@
+# Local-only ProjectOS docs — never push
+CLAUDE.md
+PRD.md
+TASKS.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# Data & artifacts
+data/raw/*
+data/processed/*
+data/gold/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/gold/.gitkeep
+
+checkpoints/
+outputs/
+runs/
+wandb/
+mlruns/
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
+# VnCoreNLP
+VnCoreNLP-*.jar
+vncorenlp/

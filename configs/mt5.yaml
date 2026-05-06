@@ -1,0 +1,27 @@
+model:
+  pretrained: google/mt5-base
+
+data:
+  train_path: data/processed/action_train.json
+  val_path:   data/processed/action_val.json
+  test_path:  data/gold/action_test.json
+  max_input_len: 128
+  max_output_len: 32
+
+train:
+  lr: 3.0e-5
+  batch_size: 8
+  epochs: 5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  grad_clip: 1.0
+  seed: 42
+
+generate:
+  num_beams: 4
+  max_new_tokens: 32
+  length_penalty: 1.0
+
+output:
+  ckpt_dir: checkpoints/mt5
+  log_dir: runs/mt5
