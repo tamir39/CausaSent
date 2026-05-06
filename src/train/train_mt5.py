@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import argparse
 import math
-import random
 from pathlib import Path
 
-import numpy as np
 import torch
 import yaml
 from torch.optim import AdamW
@@ -15,13 +13,7 @@ from transformers import get_linear_schedule_with_warmup
 
 from ..data.dataset import load_action_dataset
 from ..models.mt5_action import load_mt5
-
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+from ..utils.repro import dump_run_metadata, log_metrics, make_run_dir, set_seed
 
 
 def main() -> None:
@@ -32,6 +24,9 @@ def main() -> None:
 
     set_seed(cfg["train"]["seed"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    run_dir = make_run_dir(cfg["output"].get("log_dir", "runs"), tag="mt5")
+    dump_run_metadata(run_dir, cfg)
 
     model, tokenizer = load_mt5(cfg["model"]["pretrained"])
     model.to(device)
@@ -89,6 +84,7 @@ def main() -> None:
                 v_loss += model(**batch).loss.item()
         v_loss /= max(1, len(val_loader))
         print(f"[epoch {epoch}] val_loss={v_loss:.4f}")
+        log_metrics(run_dir, {"epoch": epoch, "val_loss": v_loss})
 
         if v_loss < best_val:
             best_val = v_loss
