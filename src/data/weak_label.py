@@ -92,9 +92,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="0 = no limit")
     args = ap.parse_args()
 
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise SystemExit("GEMINI_API_KEY not set")
+        raise SystemExit("GEMINI_API_KEY not set (export it, or put it in .env at repo root)")
 
     import google.generativeai as genai  # lazy import
 
