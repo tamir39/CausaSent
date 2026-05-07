@@ -92,11 +92,17 @@ def _render_cards(results) -> str:
             <span style="border-bottom:2px solid {color}; padding:0 2px;">{_html.escape(r.cause_text)}</span>
             <span style="color:#64748b; font-size:0.8em; margin-left:0.4em;">[{r.cause_span[0]}, {r.cause_span[1]})</span>
           </div>
-          <div style="margin-top:0.5em;">
-            <span style="color:#94a3b8; font-size:0.85em;">Hành động:</span>
-            <span style="font-weight:500;">{_html.escape(r.action)}</span>
+          <div style="margin-top:0.7em; padding:0.7em 0.9em; background:#1e293b;
+                      border-radius:6px; border-left:3px solid #fb923c;">
+            <div style="color:#fb923c; font-size:0.78em; font-weight:600;
+                        text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.25em;">
+              ⚡ Hành động đề xuất
+            </div>
+            <div style="font-size:1.15em; font-weight:600; color:#fef3c7; line-height:1.45;">
+              {_html.escape(r.action)}
+            </div>
           </div>
-          <div style="margin-top:0.4em; color:#64748b; font-size:0.8em;">
+          <div style="margin-top:0.5em; color:#64748b; font-size:0.8em;">
             confidence: {r.confidence:.2f}
           </div>
         </div>
