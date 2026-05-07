@@ -7,9 +7,8 @@ from pathlib import Path
 
 import torch
 import yaml
-from torch.optim import AdamW
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup
+from transformers import Adafactor, get_linear_schedule_with_warmup
 
 from ..data.dataset import load_action_dataset
 from ..models.mt5_action import load_mt5
@@ -30,6 +29,8 @@ def main() -> None:
 
     model, tokenizer = load_mt5(cfg["model"]["pretrained"])
     model.to(device)
+    model.gradient_checkpointing_enable()
+    model.config.use_cache = False  # required when gradient checkpointing is on
 
     train_ds = load_action_dataset(
         cfg["data"]["train_path"], tokenizer,
@@ -47,10 +48,15 @@ def main() -> None:
 
     epochs = cfg["train"]["epochs"]
     total_steps = max(1, math.ceil(len(train_loader) / accum) * epochs)
-    optim = AdamW(
+    # Adafactor (T5/mT5's native optimizer) keeps factored second-moment estimates
+    # instead of AdamW's full per-parameter state — roughly halves optimizer memory.
+    optim = Adafactor(
         model.parameters(),
         lr=float(cfg["train"]["lr"]),
         weight_decay=cfg["train"]["weight_decay"],
+        scale_parameter=False,
+        relative_step=False,
+        warmup_init=False,
     )
     sched = get_linear_schedule_with_warmup(
         optim,
