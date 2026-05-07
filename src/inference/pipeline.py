@@ -73,7 +73,13 @@ class CausaSentPipeline:
         asp_probs_sub = torch.softmax(asp_logits, dim=-1).tolist()
 
         # Reduce subword preds → word-level (take the first subword per word).
-        word_ids = enc.word_ids(batch_index=0)
+        try:
+            word_ids = enc.word_ids(batch_index=0)
+        except (ValueError, AttributeError):
+            from ..data.dataset import _word_ids_slow
+            # No padding here, so trim slow output to actual subword length.
+            seq_len = len(asp_pred)
+            word_ids = _word_ids_slow(self.tagger_tok, words, max_len=seq_len)[:seq_len]
         n_words = len(words)
         asp_word = [0] * n_words
         cau_word = [0] * n_words
