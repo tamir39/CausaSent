@@ -1,7 +1,7 @@
 # CausaSent: trích xuất bộ bốn (khía cạnh, sắc thái, nguyên nhân, hành động) từ review thương mại điện tử tiếng Việt
 
 **Tác giả**: Phí Vương Tường Tâm
-**Môn học**: Nhập môn Xử lý ngôn ngữ tự nhiên — Cuối kỳ
+
 **Ngày**: <!-- TODO: điền ngày nộp -->
 **Repo**: https://github.com/tamir39/causa-sent
 **Dataset**: https://huggingface.co/datasets/Tamir39/causasent
@@ -142,6 +142,8 @@ Tách 80/10/10 theo `review_id`, seed 42 (`scripts/split_dataset.py`):
 ---
 
 ## 3. Kiến trúc hệ thống
+
+![Hình 3.1 — Kiến trúc CausaSent end-to-end](figures/architecture.png)
 
 ```
                     review tiếng Việt thô

@@ -1,6 +1,7 @@
 """Generate figures for docs/report/report.md.
 
 Creates:
+  docs/report/figures/architecture.png          (Hình 3.1)
   docs/report/figures/phobert_train_curve.png   (Hình 4.1)
   docs/report/figures/per_class_f1.png          (Hình 6.1)
 
@@ -18,6 +19,101 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "docs" / "report" / "figures"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Hình 3.1 — System architecture
+
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+
+def _box(ax, xy, w, h, text, *, fc, ec="black", fs=9, lw=1.0):
+    x, y = xy
+    box = FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        linewidth=lw, edgecolor=ec, facecolor=fc,
+    )
+    ax.add_patch(box)
+    ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fs)
+
+def _arrow(ax, p1, p2, *, label=None, ls="-"):
+    a = FancyArrowPatch(
+        p1, p2, arrowstyle="-|>", mutation_scale=14,
+        linewidth=1.1, color="#444", linestyle=ls,
+    )
+    ax.add_patch(a)
+    if label:
+        mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+        ax.text(mx + 0.05, my, label, fontsize=8, color="#333", style="italic")
+
+fig, ax = plt.subplots(figsize=(10, 9))
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 14)
+ax.set_aspect("equal")
+ax.axis("off")
+
+C_INPUT  = "#fff3b0"   # input/output (yellow)
+C_PROC   = "#d8e2dc"   # preprocessing (grey-green)
+C_MODEL  = "#a8dadc"   # neural model (cyan)
+C_DECODE = "#ffd6a5"   # decode/post (orange)
+C_OUT    = "#caffbf"   # output (green)
+
+# Input
+_box(ax, (3.0, 12.6), 4.0, 0.9, "Review tiếng Việt thô", fc=C_INPUT, fs=10)
+
+# VnCoreNLP
+_box(ax, (3.0, 11.0), 4.0, 0.9, "VnCoreNLP word-segmenter\n(annotators=['wseg'])", fc=C_PROC, fs=9)
+
+# PhoBERT encoder
+_box(ax, (2.5, 8.6), 5.0, 1.6,
+     "PhoBERT-large encoder\n(370M params, 24 layers, hidden=1024)",
+     fc=C_MODEL, fs=10, lw=1.4)
+
+# Two heads
+_box(ax, (0.4, 6.6), 4.2, 1.2,
+     "Aspect-Sentiment head\nLinear(1024 → 43 nhãn BIO)", fc=C_MODEL, fs=9)
+_box(ax, (5.4, 6.6), 4.2, 1.2,
+     "Cause head\nLinear(1024 → 3 nhãn BIO)", fc=C_MODEL, fs=9)
+
+# Decode
+_box(ax, (1.5, 4.4), 7.0, 1.4,
+     "Decode (src/inference/decode.py)\n"
+     "BIO → spans · ghép aspect ↔ cause theo IoU max\n"
+     "drop empty cause · dedup · confidence = mean softmax",
+     fc=C_DECODE, fs=9)
+
+# Tuples (aspect, sentiment, cause)
+_box(ax, (1.5, 2.8), 7.0, 0.8,
+     "list[(aspect, sentiment, cause_span, confidence)]",
+     fc=C_OUT, fs=9)
+
+# mT5
+_box(ax, (1.5, 1.0), 7.0, 1.4,
+     "mT5-base action generator (580M)\n"
+     'Input: "<aspect> <sentiment> | <cause_text> | <review>"\n'
+     "Output: action ngắn (≤10 từ, mệnh lệnh, beam=4)",
+     fc=C_MODEL, fs=9, lw=1.4)
+
+# Final output
+_box(ax, (0.7, -0.4), 8.6, 0.9,
+     "list[(aspect, sentiment, cause_span, action, confidence)]",
+     fc=C_OUT, fs=10, lw=1.2)
+
+# Arrows
+_arrow(ax, (5.0, 12.6), (5.0, 11.9))
+_arrow(ax, (5.0, 11.0), (5.0, 10.2), label="list[str] words")
+_arrow(ax, (4.0, 8.6),  (2.5, 7.8))
+_arrow(ax, (6.0, 8.6),  (7.5, 7.8))
+_arrow(ax, (2.5, 6.6),  (3.5, 5.8), label="BIO seq")
+_arrow(ax, (7.5, 6.6),  (6.5, 5.8), label="BIO seq")
+_arrow(ax, (5.0, 4.4),  (5.0, 3.6))
+_arrow(ax, (5.0, 2.8),  (5.0, 2.4))
+_arrow(ax, (5.0, 1.0),  (5.0, 0.5))
+
+ax.set_title("Hình 3.1 — Kiến trúc CausaSent end-to-end", fontsize=12)
+fig.tight_layout()
+fig.savefig(OUT_DIR / "architecture.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"saved {OUT_DIR / 'architecture.png'}")
 
 # ---------------------------------------------------------------------------
 # Hình 4.1 — PhoBERT training trajectory (8 epochs)
