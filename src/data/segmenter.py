@@ -32,10 +32,16 @@ class VnCoreNLPSegmenter:
             "CAUSASENT_VNCORENLP_DIR", str(Path.cwd() / "vncorenlp")
         )
         Path(save_dir).mkdir(parents=True, exist_ok=True)
-        if not any(Path(save_dir).glob("VnCoreNLP-*.jar")):
-            py_vncorenlp.download_model(save_dir=save_dir)
-        # `annotators=["wseg"]` keeps it lightweight.
-        self._model = py_vncorenlp.VnCoreNLP(annotators=["wseg"], save_dir=save_dir)
+        # py_vncorenlp.download_model() and VnCoreNLP() both os.chdir() into save_dir
+        # without restoring cwd, breaking any subsequent relative paths in the caller.
+        prev_cwd = os.getcwd()
+        try:
+            if not any(Path(save_dir).glob("VnCoreNLP-*.jar")):
+                py_vncorenlp.download_model(save_dir=save_dir)
+            # `annotators=["wseg"]` keeps it lightweight.
+            self._model = py_vncorenlp.VnCoreNLP(annotators=["wseg"], save_dir=save_dir)
+        finally:
+            os.chdir(prev_cwd)
 
     def segment(self, text: str) -> list[str]:
         # py_vncorenlp returns sentences of underscore-joined words.
