@@ -41,11 +41,12 @@ def main() -> None:
     )
 
     bs = cfg["train"]["batch_size"]
+    accum = max(1, int(cfg["train"].get("grad_accum_steps", 1)))
     train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False)
 
     epochs = cfg["train"]["epochs"]
-    total_steps = max(1, len(train_loader) * epochs)
+    total_steps = max(1, math.ceil(len(train_loader) / accum) * epochs)
     optim = AdamW(
         model.parameters(),
         lr=float(cfg["train"]["lr"]),
@@ -64,15 +65,17 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         model.train()
         running = 0.0
+        optim.zero_grad()
         for step, batch in enumerate(train_loader, 1):
             batch = {k: v.to(device) for k, v in batch.items()}
             out = model(**batch)
-            optim.zero_grad()
-            out.loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["grad_clip"])
-            optim.step()
-            sched.step()
+            (out.loss / accum).backward()
             running += out.loss.item()
+            if step % accum == 0 or step == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["grad_clip"])
+                optim.step()
+                sched.step()
+                optim.zero_grad()
             if step % 50 == 0:
                 print(f"epoch {epoch} step {step}/{len(train_loader)} loss={running / step:.4f}")
 

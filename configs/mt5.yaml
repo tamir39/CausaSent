@@ -10,7 +10,8 @@ data:
 
 train:
   lr: 3.0e-5
-  batch_size: 8
+  batch_size: 4
+  grad_accum_steps: 2     # effective batch = batch_size * grad_accum_steps
   epochs: 5
   weight_decay: 0.01
   warmup_ratio: 0.1
