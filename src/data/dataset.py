@@ -99,7 +99,10 @@ class TaggingDataset(Dataset):
             padding="max_length",
             return_tensors="pt",
         )
-        word_ids = enc.word_ids(batch_index=0)
+        try:
+            word_ids = enc.word_ids(batch_index=0)
+        except (ValueError, AttributeError):
+            word_ids = _word_ids_slow(self.tokenizer, ex.words, self.max_len)
         asp_labels = [IGNORE_INDEX] * len(word_ids)
         cau_labels = [IGNORE_INDEX] * len(word_ids)
         seen: set[int] = set()
@@ -116,6 +119,31 @@ class TaggingDataset(Dataset):
             "asp_labels": torch.tensor(asp_labels, dtype=torch.long),
             "cause_labels": torch.tensor(cau_labels, dtype=torch.long),
         }
+
+
+def _word_ids_slow(tokenizer, words: list[str], max_len: int) -> list[int | None]:
+    """Manual word_ids() for slow tokenizers (PhoBERT often returns slow).
+
+    Tokenizes each word individually and records which output position maps
+    back to which word index. Mirrors what fast tokenizers expose via
+    `enc.word_ids()`. Pads/truncates to `max_len` with None for specials/pad.
+    """
+    cls = tokenizer.cls_token_id
+    sep = tokenizer.sep_token_id
+    out: list[int | None] = [None]  # CLS
+    n_special = int(cls is not None) + int(sep is not None)
+    budget = max_len - n_special
+    for w_idx, word in enumerate(words):
+        toks = tokenizer.encode(word, add_special_tokens=False)
+        if not toks:
+            continue
+        if len(out) - 1 + len(toks) > budget:
+            break
+        out.extend([w_idx] * len(toks))
+    out.append(None)  # SEP
+    while len(out) < max_len:
+        out.append(None)  # pad
+    return out[:max_len]
 
 
 def load_tagging_dataset(path: str | Path, tokenizer, max_len: int, segmenter_kind: str = "vncorenlp") -> TaggingDataset:
