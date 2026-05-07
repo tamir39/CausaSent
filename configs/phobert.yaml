@@ -3,8 +3,8 @@ model:
   dropout: 0.1
 
 data:
-  train_path: data/processed/train.json
-  val_path:   data/processed/val.json
+  train_path: data/gold/train.json
+  val_path:   data/gold/val.json
   test_path:  data/gold/test.json
   max_len: 128
   word_segmenter: vncorenlp   # vncorenlp | none

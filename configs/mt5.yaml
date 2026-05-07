@@ -2,9 +2,9 @@ model:
   pretrained: google/mt5-base
 
 data:
-  train_path: data/processed/action_train.json
-  val_path:   data/processed/action_val.json
-  test_path:  data/gold/action_test.json
+  train_path: data/gold/train.json
+  val_path:   data/gold/val.json
+  test_path:  data/gold/test.json
   max_input_len: 128
   max_output_len: 32
 
