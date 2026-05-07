@@ -43,7 +43,7 @@ class CausaSentPipeline:
         self.tagger_tok = PhoBertTwoHeadTagger.load_tokenizer(phobert_pretrained)
         self.tagger = PhoBertTwoHeadTagger(pretrained=phobert_pretrained)
         state = torch.load(phobert_ckpt, map_location=self.device)
-        self.tagger.load_state_dict(state["model"] if "model" in state else state)
+        self.tagger.load_state_dict(state["model"] if "model" in state else state, strict=False)
         self.tagger.to(self.device).eval()
 
         self.mt5, self.mt5_tok = load_mt5(mt5_pretrained)

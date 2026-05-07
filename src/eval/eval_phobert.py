@@ -55,7 +55,10 @@ def evaluate(ckpt_path: str, config_path: str, split: str = "test") -> dict:
 
     model = PhoBertTwoHeadTagger(pretrained=cfg["model"]["pretrained"]).to(device)
     state = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(state["model"] if "model" in state else state)
+    # strict=False: training saves asp_loss_fn.weight / cause_loss_fn.weight
+    # (inverse-frequency class weights) into the checkpoint; eval doesn't
+    # rebuild loss functions, so those keys are unused at inference time.
+    model.load_state_dict(state["model"] if "model" in state else state, strict=False)
     model.eval()
 
     asp_pred_tags: list[list[str]] = []
