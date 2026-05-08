@@ -115,6 +115,7 @@ class CausaSentPipeline:
                 aspect=t.aspect, sentiment=t.sentiment, cause=t.cause_text, review=review,
                 device=self.device,
             )
+            action = _sentiment_prefix_guardrail(action, t.sentiment)
             results.append(PredictedTuple(
                 aspect=t.aspect,
                 sentiment=t.sentiment,
@@ -124,6 +125,27 @@ class CausaSentPipeline:
                 confidence=t.confidence,
             ))
         return results
+
+
+# Prefixes that signal a "keep doing this" action (only sensible on positive
+# sentiment). When the generator emits one of these for a non-positive tuple
+# it is the majority-class collapse we documented in the mT5 retrain commit;
+# rewrite the prefix so the demo never shows obvious nonsense like
+# "Duy trì hộp móp méo" for a negative complaint.
+_KEEP_PREFIXES = ("Duy trì ", "Giữ ", "Phát huy ", "Tiếp tục ")
+_NEGATIVE_FALLBACK_PREFIX = "Cải thiện "
+_NEUTRAL_FALLBACK_PREFIX = "Rà soát "
+
+
+def _sentiment_prefix_guardrail(action: str, sentiment: str) -> str:
+    if sentiment == "positive":
+        return action
+    for kp in _KEEP_PREFIXES:
+        if action.startswith(kp):
+            tail = action[len(kp):]
+            new_prefix = _NEGATIVE_FALLBACK_PREFIX if sentiment == "negative" else _NEUTRAL_FALLBACK_PREFIX
+            return new_prefix + tail
+    return action
 
 
 _ = IGNORE_INDEX  # silence unused import (kept for potential future masking use)
