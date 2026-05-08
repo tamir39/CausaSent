@@ -35,11 +35,13 @@ def main() -> None:
     train_ds = load_action_dataset(
         cfg["data"]["train_path"], tokenizer,
         cfg["data"]["max_input_len"], cfg["data"]["max_output_len"],
+        balance_sentiment=cfg["data"].get("balance_sentiment", False),
     )
     val_ds = load_action_dataset(
         cfg["data"]["val_path"], tokenizer,
         cfg["data"]["max_input_len"], cfg["data"]["max_output_len"],
     )
+    print(f"train examples: {len(train_ds)}  val examples: {len(val_ds)}")
 
     bs = cfg["train"]["batch_size"]
     accum = max(1, int(cfg["train"].get("grad_accum_steps", 1)))

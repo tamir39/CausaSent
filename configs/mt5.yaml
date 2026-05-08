@@ -7,12 +7,16 @@ data:
   test_path:  data/gold/test.json
   max_input_len: 128
   max_output_len: 32
+  # Oversample minority sentiments on the train split so the action-prefix prior
+  # ("Duy trì" for positive, "Cải thiện" for negative, etc.) is conditioned on
+  # the sentiment field instead of collapsing to majority class.
+  balance_sentiment: true
 
 train:
   lr: 3.0e-5
   batch_size: 4
   grad_accum_steps: 2     # effective batch = batch_size * grad_accum_steps
-  epochs: 5
+  epochs: 12
   weight_decay: 0.01
   warmup_ratio: 0.1
   grad_clip: 1.0

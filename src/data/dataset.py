@@ -168,7 +168,10 @@ class ActionExample:
     target_text: str
 
 
-def build_action_examples(reviews: list[Review]) -> list[ActionExample]:
+def build_action_examples(
+    reviews: list[Review],
+    balance_sentiment: bool = False,
+) -> list[ActionExample]:
     out: list[ActionExample] = []
     for r in reviews:
         for ann in r.annotations:
@@ -178,8 +181,27 @@ def build_action_examples(reviews: list[Review]) -> list[ActionExample]:
                 cause=ann.cause_text,
                 review=r.review,
             )
-            out.append(ActionExample(inp, ann.action))
-    return out
+            out.append((ann.sentiment, ActionExample(inp, ann.action)))
+
+    if not balance_sentiment:
+        return [ex for _, ex in out]
+
+    # Balance by oversampling minority sentiments to match the majority class.
+    # Why: action vocabularies differ sharply across sentiments (positive ~ "Duy trì
+    # X", negative ~ "Cải thiện X"). When positives dominate, the first-token prior
+    # collapses to "Duy" regardless of the sentiment field in the prompt — this is
+    # exactly the failure we observed in the demo.
+    from collections import defaultdict
+    buckets: dict[str, list[ActionExample]] = defaultdict(list)
+    for sent, ex in out:
+        buckets[sent].append(ex)
+    target = max(len(v) for v in buckets.values())
+    balanced: list[ActionExample] = []
+    for sent, exs in buckets.items():
+        repeats, rem = divmod(target, len(exs))
+        balanced.extend(exs * repeats)
+        balanced.extend(exs[:rem])
+    return balanced
 
 
 class ActionDataset(Dataset):
@@ -223,7 +245,13 @@ class _noop:
     def __exit__(self, *a): return False
 
 
-def load_action_dataset(path: str | Path, tokenizer, max_input_len: int, max_output_len: int) -> ActionDataset:
+def load_action_dataset(
+    path: str | Path,
+    tokenizer,
+    max_input_len: int,
+    max_output_len: int,
+    balance_sentiment: bool = False,
+) -> ActionDataset:
     reviews = load_reviews(path)
-    examples = build_action_examples(reviews)
+    examples = build_action_examples(reviews, balance_sentiment=balance_sentiment)
     return ActionDataset(examples, tokenizer, max_input_len=max_input_len, max_output_len=max_output_len)
