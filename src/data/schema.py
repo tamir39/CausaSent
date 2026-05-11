@@ -1,4 +1,11 @@
-"""Pydantic schema for reviews and annotations (matches SPEC §1.2)."""
+"""Pydantic schema for the new ABSA annotation format.
+
+New schema (post-pivot):
+  review + annotations: [{aspect_term, aspect_term_span, aspect_category, sentiment}]
+
+The old schema (cause_span, action) is dropped.
+For data loading use dataset.load_absa_jsonl() which reads flat JSONL directly.
+"""
 from __future__ import annotations
 
 import json
@@ -9,35 +16,34 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .label_schema import ASPECTS, SENTIMENTS
 
-Sentiment = Literal["positive", "negative", "neutral"]
+Sentiment = Literal["positive", "negative"]
 
 
 class Annotation(BaseModel):
-    aspect: str
+    aspect_category: str
+    aspect_term: str
+    aspect_term_span: tuple[int, int] = Field(..., description="[start_char, end_char) into review")
     sentiment: Sentiment
-    cause_text: str
-    cause_span: tuple[int, int] = Field(..., description="[start_char, end_char) into review")
-    action: str
 
-    @field_validator("aspect")
+    @field_validator("aspect_category")
     @classmethod
     def _aspect_in_taxonomy(cls, v: str) -> str:
         if v not in ASPECTS:
-            raise ValueError(f"aspect {v!r} not in taxonomy {ASPECTS}")
+            raise ValueError(f"aspect_category {v!r} not in taxonomy {ASPECTS}")
         return v
 
     @field_validator("sentiment")
     @classmethod
-    def _sentiment_in_taxonomy(cls, v: str) -> str:
+    def _sentiment_binary(cls, v: str) -> str:
         if v not in SENTIMENTS:
             raise ValueError(f"sentiment {v!r} not in {SENTIMENTS}")
         return v
 
     @model_validator(mode="after")
     def _span_well_formed(self) -> "Annotation":
-        s, e = self.cause_span
+        s, e = self.aspect_term_span
         if not (0 <= s < e):
-            raise ValueError(f"cause_span malformed: {self.cause_span}")
+            raise ValueError(f"aspect_term_span malformed: {self.aspect_term_span}")
         return self
 
 
@@ -49,14 +55,13 @@ class Review(BaseModel):
     @model_validator(mode="after")
     def _spans_match_text(self) -> "Review":
         for ann in self.annotations:
-            s, e = ann.cause_span
+            s, e = ann.aspect_term_span
             if e > len(self.review):
-                raise ValueError(f"cause_span {ann.cause_span} out of range for id={self.id}")
+                raise ValueError(f"aspect_term_span {ann.aspect_term_span} out of range for id={self.id}")
             substr = self.review[s:e]
-            if substr != ann.cause_text:
+            if substr != ann.aspect_term:
                 raise ValueError(
-                    f"cause_span/cause_text mismatch in id={self.id}: "
-                    f"slice={substr!r} vs cause_text={ann.cause_text!r}"
+                    f"span/term mismatch in id={self.id}: slice={substr!r} vs aspect_term={ann.aspect_term!r}"
                 )
         return self
 
