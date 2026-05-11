@@ -1,8 +1,7 @@
-"""Train the PhoBERT two-head tagger.
+"""Train the PhoBERT ABSA model (two-head: ATE + binary sentiment).
 
-Best checkpoint is selected by **entity-level F1** on the val split (mean of
-aspect-sentiment F1 and cause F1), not by validation loss. Loss and F1 are
-weakly correlated; F1 is what we actually care about downstream.
+Best checkpoint is selected by entity-level F1 on the val split:
+  mean of ATE-category F1 (span + category match) and Sentiment Accuracy at B-tokens.
 """
 from __future__ import annotations
 
@@ -18,14 +17,14 @@ from transformers import get_linear_schedule_with_warmup
 
 from ..data.dataset import load_tagging_dataset
 from ..data.label_schema import (
-    ASPECT_SENT_ID2LABEL,
-    ASPECT_SENT_LABELS,
-    CAUSE_ID2LABEL,
-    CAUSE_LABELS,
+    ATE_ID2LABEL,
+    ATE_LABELS,
     IGNORE_INDEX,
+    SENTIMENT_ID2LABEL,
+    SENTIMENT_LABELS,
 )
 from ..inference.decode import _bio_segments
-from ..models.phobert_tagger import PhoBertTwoHeadTagger
+from ..models.phobert_tagger import PhoBertABSA
 from ..utils.repro import dump_run_metadata, log_metrics, make_run_dir, set_seed
 
 
@@ -49,39 +48,57 @@ def _entity_f1(pred_set: set, gold_set: set) -> float:
     return 2 * p * r / max(1e-9, p + r)
 
 
+def _sent_accuracy(pred_list: list[int], gold_list: list[int]) -> float:
+    if not gold_list:
+        return 0.0
+    correct = sum(p == g for p, g in zip(pred_list, gold_list))
+    return correct / len(gold_list)
+
+
 @torch.no_grad()
-def _eval_entity_f1(model, val_loader, device) -> tuple[float, float, float]:
-    """Return (asp_f1, cause_f1, mean_f1) on the val loader."""
+def _eval(model, val_loader, device) -> tuple[float, float, float]:
+    """Return (ate_f1, sent_acc, mean_metric) on the val loader.
+
+    ate_f1: entity-level F1 on (aspect_category, start, end) tuples
+    sent_acc: accuracy of sentiment prediction at B-token positions only
+    """
     model.eval()
-    asp_pred: set = set()
-    asp_gold: set = set()
-    cau_pred: set = set()
-    cau_gold: set = set()
+    ate_pred: set = set()
+    ate_gold: set = set()
+    sent_pred_all: list[int] = []
+    sent_gold_all: list[int] = []
     doc_id = 0
+
     for batch in val_loader:
         batch = {k: v.to(device) for k, v in batch.items()}
         out = model(batch["input_ids"], batch["attention_mask"])
-        ap = out.asp_logits.argmax(-1).cpu().tolist()
-        cp = out.cause_logits.argmax(-1).cpu().tolist()
-        ag = batch["asp_labels"].cpu().tolist()
-        cg = batch["cause_labels"].cpu().tolist()
+        ap = out.ate_logits.argmax(-1).cpu().tolist()
+        sp = out.sent_logits.argmax(-1).cpu().tolist()
+        ag = batch["ate_labels"].cpu().tolist()
+        sg = batch["sent_labels"].cpu().tolist()
+
         for j in range(len(ap)):
-            ap_tags = [ASPECT_SENT_ID2LABEL[p] for p, g in zip(ap[j], ag[j]) if g != IGNORE_INDEX]
-            ag_tags = [ASPECT_SENT_ID2LABEL[g] for g in ag[j] if g != IGNORE_INDEX]
-            cp_tags = [CAUSE_ID2LABEL[p] for p, g in zip(cp[j], cg[j]) if g != IGNORE_INDEX]
-            cg_tags = [CAUSE_ID2LABEL[g] for g in cg[j] if g != IGNORE_INDEX]
+            # ATE entity F1 — only on non-IGNORE positions
+            ap_tags = [ATE_ID2LABEL.get(p, "O") for p, g in zip(ap[j], ag[j]) if g != IGNORE_INDEX]
+            ag_tags = [ATE_ID2LABEL.get(g, "O") for g in ag[j] if g != IGNORE_INDEX]
             for s, e, base in _bio_segments(ap_tags):
-                asp_pred.add((doc_id, s, e, base))
+                ate_pred.add((doc_id, s, e, base))
             for s, e, base in _bio_segments(ag_tags):
-                asp_gold.add((doc_id, s, e, base))
-            for s, e, _b in _bio_segments(cp_tags):
-                cau_pred.add((doc_id, s, e))
-            for s, e, _b in _bio_segments(cg_tags):
-                cau_gold.add((doc_id, s, e))
+                ate_gold.add((doc_id, s, e, base))
+
+            # Sentiment accuracy — only at B-token positions (where gold != IGNORE_INDEX)
+            for pred_s, gold_s in zip(sp[j], sg[j]):
+                if gold_s == IGNORE_INDEX:
+                    continue
+                sent_pred_all.append(pred_s)
+                sent_gold_all.append(gold_s)
+
             doc_id += 1
-    asp_f1 = _entity_f1(asp_pred, asp_gold)
-    cau_f1 = _entity_f1(cau_pred, cau_gold)
-    return asp_f1, cau_f1, (asp_f1 + cau_f1) / 2.0
+
+    ate_f1 = _entity_f1(ate_pred, ate_gold)
+    sent_acc = _sent_accuracy(sent_pred_all, sent_gold_all)
+    mean_metric = (ate_f1 + sent_acc) / 2.0
+    return ate_f1, sent_acc, mean_metric
 
 
 def main() -> None:
@@ -96,24 +113,25 @@ def main() -> None:
     run_dir = make_run_dir(cfg["output"].get("log_dir", "runs"), tag="phobert")
     dump_run_metadata(run_dir, cfg)
 
-    tokenizer = PhoBertTwoHeadTagger.load_tokenizer(cfg["model"]["pretrained"])
+    tokenizer = PhoBertABSA.load_tokenizer(cfg["model"]["pretrained"])
     seg_kind = cfg["data"].get("word_segmenter", "vncorenlp")
 
     train_ds = load_tagging_dataset(cfg["data"]["train_path"], tokenizer, cfg["data"]["max_len"], seg_kind)
     val_ds = load_tagging_dataset(cfg["data"]["val_path"], tokenizer, cfg["data"]["max_len"], seg_kind)
 
-    asp_w = None
-    cau_w = None
+    ate_w = None
+    sent_w = None
     if cfg["train"].get("class_weighting") == "inverse_freq":
-        asp_w = _inverse_freq_weights(train_ds, len(ASPECT_SENT_LABELS), "asp_labels").to(device)
-        cau_w = _inverse_freq_weights(train_ds, len(CAUSE_LABELS), "cause_labels").to(device)
+        ate_w = _inverse_freq_weights(train_ds, len(ATE_LABELS), "ate_labels").to(device)
+        sent_w = _inverse_freq_weights(train_ds, len(SENTIMENT_LABELS), "sent_labels").to(device)
 
-    model = PhoBertTwoHeadTagger(
+    model = PhoBertABSA(
         pretrained=cfg["model"]["pretrained"],
         dropout=cfg["model"]["dropout"],
-        asp_class_weights=asp_w,
-        cause_class_weights=cau_w,
-        cause_loss_weight=cfg["train"]["cause_loss_weight"],
+        ate_class_weights=ate_w,
+        sent_class_weights=sent_w,
+        sent_loss_weight=cfg["train"].get("sent_loss_weight", 1.0),
+        contrastive_weight=cfg["train"].get("contrastive_weight", 0.0),
     ).to(device)
 
     bs = cfg["train"]["batch_size"]
@@ -135,7 +153,7 @@ def main() -> None:
 
     ckpt_dir = Path(cfg["output"]["ckpt_dir"])
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    best_f1 = -1.0
+    best_metric = -1.0
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -152,7 +170,6 @@ def main() -> None:
             if step % 50 == 0:
                 print(f"epoch {epoch} step {step}/{len(train_loader)} loss={running / step:.4f}")
 
-        # Validation: loss for monitoring, F1 for checkpoint selection.
         model.eval()
         v_loss = 0.0
         with torch.no_grad():
@@ -161,20 +178,26 @@ def main() -> None:
                 v_loss += model(**batch).loss.item()
         v_loss /= max(1, len(val_loader))
 
-        asp_f1, cau_f1, mean_f1 = _eval_entity_f1(model, val_loader, device)
-        print(f"[epoch {epoch}] val_loss={v_loss:.4f} asp_f1={asp_f1:.4f} cause_f1={cau_f1:.4f} mean_f1={mean_f1:.4f}")
+        ate_f1, sent_acc, mean_metric = _eval(model, val_loader, device)
+        print(
+            f"[epoch {epoch}] val_loss={v_loss:.4f} "
+            f"ate_f1={ate_f1:.4f} sent_acc={sent_acc:.4f} mean={mean_metric:.4f}"
+        )
         log_metrics(run_dir, {
             "epoch": epoch, "val_loss": v_loss,
-            "asp_f1": asp_f1, "cause_f1": cau_f1, "mean_f1": mean_f1,
+            "ate_f1": ate_f1, "sent_acc": sent_acc, "mean_metric": mean_metric,
         })
 
-        if mean_f1 > best_f1:
-            best_f1 = mean_f1
-            torch.save({"model": model.state_dict(), "config": cfg, "mean_f1": mean_f1}, ckpt_dir / "best.pt")
-            print(f"  ↳ saved best checkpoint (mean_f1={mean_f1:.4f})")
+        if mean_metric > best_metric:
+            best_metric = mean_metric
+            torch.save(
+                {"model": model.state_dict(), "config": cfg, "mean_metric": mean_metric},
+                ckpt_dir / "best.pt",
+            )
+            print(f"  saved best checkpoint (mean={mean_metric:.4f})")
 
     torch.save({"model": model.state_dict(), "config": cfg}, ckpt_dir / "last.pt")
-    log_metrics(run_dir, {"event": "done", "best_mean_f1": best_f1})
+    log_metrics(run_dir, {"event": "done", "best_mean_metric": best_metric})
 
 
 if __name__ == "__main__":

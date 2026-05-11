@@ -1,30 +1,35 @@
-"""Decode PhoBERT two-head logits into structured (aspect, sentiment, cause) tuples."""
+"""Decode PhoBERT two-head logits into structured ABSA tuples.
+
+Head A (ATE) BIO tags determine where aspect terms are and their categories.
+Head B (Sentiment) logit at the B-token position determines sentiment.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Sequence
 
 from ..data.label_schema import (
-    ASPECT_SENT_ID2LABEL,
-    CAUSE_ID2LABEL,
-    parse_aspect_sent_tag,
+    ATE_ID2LABEL,
+    SENTIMENT_ID2LABEL,
+    IGNORE_INDEX,
+    parse_ate_tag,
 )
 
 
 @dataclass
 class ExtractedTuple:
-    aspect: str
+    aspect_category: str
+    aspect_term: str                  # surface form extracted from review
+    aspect_term_span: tuple[int, int] # char span in original review
     sentiment: str
-    cause_text: str
-    cause_span: tuple[int, int]   # char span in original review
-    word_indices: list[int]       # indices into the segmented word list
-    confidence: float = 1.0       # mean predicted-class prob over the aspect span; 1.0 if probs unavailable
+    word_indices: list[int]           # word indices of the span
+    confidence: float = 1.0           # mean B-token softmax probability
 
 
 def _bio_segments(tags: list[str]) -> list[tuple[int, int, str]]:
-    """Return list of (start_word_idx, end_word_idx_exclusive, base_tag) from BIO tags.
+    """Return (start_word_idx, end_word_idx_exclusive, base_tag) for each BIO span.
 
-    `base_tag` is the part after the B-/I- prefix (e.g. 'DEL-NEG' or 'CAUSE').
+    `base_tag` is the part after B-/I- (e.g. 'delivery' or 'product_quality').
     """
     segs: list[tuple[int, int, str]] = []
     i, n = 0, len(tags)
@@ -42,69 +47,45 @@ def _bio_segments(tags: list[str]) -> list[tuple[int, int, str]]:
     return segs
 
 
-def _span_confidence(
-    asp_label_ids: Sequence[int],
-    asp_probs: Sequence[Sequence[float]] | None,
-    s: int,
-    e: int,
-) -> float:
-    if asp_probs is None or e <= s:
-        return 1.0
-    vals: list[float] = []
-    for k in range(s, e):
-        if k >= len(asp_probs):
-            break
-        row = asp_probs[k]
-        cls = asp_label_ids[k]
-        if 0 <= cls < len(row):
-            vals.append(float(row[cls]))
-    return sum(vals) / len(vals) if vals else 1.0
-
-
 def decode_to_tuples(
-    asp_label_ids: list[int],
-    cause_label_ids: list[int],
+    ate_label_ids: list[int],
+    sent_label_ids: list[int],
     word_spans: list[tuple[int, int]],
     review_text: str,
     *,
-    asp_probs: Sequence[Sequence[float]] | None = None,
+    ate_probs: Sequence[Sequence[float]] | None = None,
     min_confidence: float = 0.0,
 ) -> list[ExtractedTuple]:
-    """Produce extracted tuples from per-word predictions.
+    """Produce extracted ABSA tuples from per-word predictions.
 
-    A tuple is created for every aspect-sentiment span; its cause is the
-    cause-BIO span that overlaps it the most. If no cause overlaps, we fall
-    back to the aspect-sentiment span itself.
+    For each B-token, the ATE head determines the span extent and aspect_category,
+    and the Sentiment head gives the binary sentiment at that B-token position.
 
     Post-processing:
-    - drops empty-cause tuples
-    - dedups identical (aspect, sentiment, cause_span)
-    - filters by `min_confidence` (mean predicted-class prob over the aspect span)
+    - Dedups identical (aspect_category, sentiment, char_span) tuples
+    - Filters by min_confidence
     """
-    asp_tags = [ASPECT_SENT_ID2LABEL[i] for i in asp_label_ids]
-    cau_tags = [CAUSE_ID2LABEL[i] for i in cause_label_ids]
-
-    asp_segs = _bio_segments(asp_tags)
-    cau_segs = _bio_segments(cau_tags)
+    ate_tags = [ATE_ID2LABEL.get(i, "O") for i in ate_label_ids]
 
     out: list[ExtractedTuple] = []
     seen: set[tuple[str, str, int, int]] = set()
-    for s, e, base in asp_segs:
-        parsed = parse_aspect_sent_tag(f"B-{base}")
+
+    for s, e, base in _bio_segments(ate_tags):
+        parsed = parse_ate_tag(f"B-{base}")
         if parsed is None:
             continue
-        _, aspect, sentiment = parsed
+        _, aspect_category = parsed
 
-        # Pick the cause segment with the largest overlap.
-        best: tuple[int, int] | None = None
-        best_ov = 0
-        for cs, ce, _cb in cau_segs:
-            ov = max(0, min(e, ce) - max(s, cs))
-            if ov > best_ov:
-                best_ov = ov
-                best = (cs, ce)
-        cs, ce = best if best is not None else (s, e)
-        word_idx = list(range(cs, ce))
+        # Sentiment from Head B at the B-token position (index s).
+        s_lbl = sent_label_ids[s] if s < len(sent_label_ids) else -1
+        if s_lbl == IGNORE_INDEX or s_lbl < 0 or s_lbl >= len(SENTIMENT_ID2LABEL):
+            # Fall back to positive when no label available (inference without labels).
+            sentiment = SENTIMENT_ID2LABEL.get(0, "positive")
+        else:
+            sentiment = SENTIMENT_ID2LABEL[s_lbl]
+
+        # Map word span → char span.
+        word_idx = list(range(s, e))
         if not word_idx:
             continue
         if word_idx[0] >= len(word_spans) or word_idx[-1] >= len(word_spans):
@@ -114,21 +95,31 @@ def decode_to_tuples(
         if char_e <= char_s:
             continue
 
-        conf = _span_confidence(asp_label_ids, asp_probs, s, e)
+        # Confidence: mean ATE softmax prob over the span.
+        conf = 1.0
+        if ate_probs is not None:
+            vals = [
+                float(ate_probs[k][ate_label_ids[k]])
+                for k in range(s, e)
+                if k < len(ate_probs) and 0 <= ate_label_ids[k] < len(ate_probs[k])
+            ]
+            conf = sum(vals) / len(vals) if vals else 1.0
+
         if conf < min_confidence:
             continue
 
-        key = (aspect, sentiment, char_s, char_e)
+        key = (aspect_category, sentiment, char_s, char_e)
         if key in seen:
             continue
         seen.add(key)
 
         out.append(ExtractedTuple(
-            aspect=aspect,
+            aspect_category=aspect_category,
+            aspect_term=review_text[char_s:char_e],
+            aspect_term_span=(char_s, char_e),
             sentiment=sentiment,
-            cause_text=review_text[char_s:char_e],
-            cause_span=(char_s, char_e),
             word_indices=word_idx,
             confidence=conf,
         ))
+
     return out

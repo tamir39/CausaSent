@@ -1,11 +1,15 @@
-"""PyTorch datasets for the two training tasks.
+"""PyTorch dataset for ABSA training (new schema).
 
-`TaggingDataset` — for PhoBERT joint aspect-sentiment + cause extraction.
-`ActionDataset`  — for mT5 action generation, conditioned on (aspect, sentiment, cause, review).
+Reads flat JSONL records produced by annotate_aspect_terms.py / annotate_tiki.py,
+groups them by review id, and builds per-word label sequences for two heads:
+
+  Head A (ATE): BIO + aspect_category, 15 labels — where the term is and what aspect
+  Head B (Sentiment): binary, 2 labels — at B-token positions only (IGNORE_INDEX elsewhere)
 """
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,12 +17,11 @@ import torch
 from torch.utils.data import Dataset
 
 from .label_schema import (
-    ASPECT_SENT_LABEL2ID,
-    CAUSE_LABEL2ID,
+    ATE_LABEL2ID,
     IGNORE_INDEX,
-    aspect_sent_tag,
+    SENTIMENT_LABEL2ID,
+    ate_tag,
 )
-from .schema import Review, load_reviews
 from .segmenter import Segmenter, get_segmenter
 from .span_align import expand_to_word_boundary, word_boundaries, words_in_span
 
@@ -26,62 +29,102 @@ from .span_align import expand_to_word_boundary, word_boundaries, words_in_span
 @dataclass
 class TaggedExample:
     review_id: str
-    words: list[str]                 # underscore-joined VnCoreNLP words
-    aspect_sent_labels: list[int]    # per word, into ASPECT_SENT_LABEL2ID
-    cause_labels: list[int]          # per word, into CAUSE_LABEL2ID
+    words: list[str]          # underscore-joined VnCoreNLP words
+    ate_labels: list[int]     # per word, into ATE_LABEL2ID (Head A)
+    sent_labels: list[int]    # per word, IGNORE_INDEX except at B-token positions (Head B)
 
 
-def _build_word_labels(review: Review, words: list[str], text: str) -> tuple[list[int], list[int]]:
+def _build_word_labels(
+    annotations: list[dict],
+    words: list[str],
+    text: str,
+) -> tuple[list[int], list[int]]:
     """Convert annotation char-spans into per-word BIO labels for both heads."""
     n = len(words)
-    asp_sent = [ASPECT_SENT_LABEL2ID["O"]] * n
-    cause = [CAUSE_LABEL2ID["O"]] * n
-
     w_spans = word_boundaries(text, words)
     if len(w_spans) != n:
-        # Misalignment — silently truncate to common length.
         n = min(n, len(w_spans))
-        asp_sent = asp_sent[:n]
-        cause = cause[:n]
 
-    for ann in review.annotations:
-        snapped = expand_to_word_boundary(tuple(ann.cause_span), w_spans)
+    ate = [ATE_LABEL2ID["O"]] * n
+    sent = [IGNORE_INDEX] * n
+
+    for ann in annotations:
+        s_char, e_char = ann["aspect_term_span"]
+        snapped = expand_to_word_boundary((s_char, e_char), w_spans)
         widx = words_in_span(snapped, w_spans)
         if not widx:
             continue
+        asp = ann["aspect_category"]
+        sentiment = ann["sentiment"]
+        try:
+            ate_tag(asp, "B")  # validate aspect_category is known
+        except ValueError:
+            continue  # unknown aspect_category — skip annotation
+        if sentiment not in SENTIMENT_LABEL2ID:
+            continue
+
         for k, wi in enumerate(widx):
+            if wi >= n:
+                continue
             pos = "B" if k == 0 else "I"
-            tag = aspect_sent_tag(ann.aspect, ann.sentiment, pos)
-            asp_sent[wi] = ASPECT_SENT_LABEL2ID[tag]
-            cause[wi] = CAUSE_LABEL2ID[f"{pos}-CAUSE"]
-    return asp_sent, cause
+            tag = ate_tag(asp, pos)
+            ate[wi] = ATE_LABEL2ID[tag]
+            if k == 0:
+                sent[wi] = SENTIMENT_LABEL2ID[sentiment]
+
+    return ate, sent
 
 
-def build_tagged_examples(reviews: list[Review], segmenter: Segmenter) -> list[TaggedExample]:
+def load_absa_jsonl(path: str | Path) -> list[dict]:
+    """Load flat JSONL into grouped reviews.
+
+    Each JSONL record has one annotation. Records with the same review id are
+    merged so downstream code sees: {id, review, annotations: [...]}.
+    """
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rid = rec.get("id", "")
+        if rid not in groups:
+            groups[rid] = {"id": rid, "review": rec["review"], "annotations": []}
+            order.append(rid)
+        ann = {
+            "aspect_term": rec.get("aspect_term", ""),
+            "aspect_term_span": rec.get("aspect_term_span", [0, 0]),
+            "aspect_category": rec.get("aspect_category", rec.get("aspect", "")),
+            "sentiment": rec.get("sentiment", ""),
+        }
+        groups[rid]["annotations"].append(ann)
+    return [groups[rid] for rid in order]
+
+
+def build_tagged_examples(reviews: list[dict], segmenter: Segmenter) -> list[TaggedExample]:
     out: list[TaggedExample] = []
     for r in reviews:
-        words = segmenter.segment(r.review)
+        words = segmenter.segment(r["review"])
         if not words:
             continue
-        asp, cau = _build_word_labels(r, words, r.review)
-        out.append(TaggedExample(r.id, words, asp, cau))
+        ate, sent = _build_word_labels(r["annotations"], words, r["review"])
+        out.append(TaggedExample(r["id"], words, ate, sent))
     return out
 
 
 class TaggingDataset(Dataset):
-    """Word-segmented reviews → PhoBERT subword inputs with two label sequences.
+    """Word-segmented reviews -> PhoBERT subword inputs with two label sequences.
 
     Per-word labels are propagated to the *first* subword of each word; subsequent
     subwords and special tokens are set to IGNORE_INDEX so they do not contribute
     to the loss.
     """
 
-    def __init__(
-        self,
-        examples: list[TaggedExample],
-        tokenizer,
-        max_len: int = 128,
-    ):
+    def __init__(self, examples: list[TaggedExample], tokenizer, max_len: int = 128):
         self.examples = examples
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -103,31 +146,28 @@ class TaggingDataset(Dataset):
             word_ids = enc.word_ids(batch_index=0)
         except (ValueError, AttributeError):
             word_ids = _word_ids_slow(self.tokenizer, ex.words, self.max_len)
-        asp_labels = [IGNORE_INDEX] * len(word_ids)
-        cau_labels = [IGNORE_INDEX] * len(word_ids)
+
+        ate_labels = [IGNORE_INDEX] * len(word_ids)
+        sent_labels = [IGNORE_INDEX] * len(word_ids)
         seen: set[int] = set()
         for i, wid in enumerate(word_ids):
             if wid is None or wid in seen:
                 continue
             seen.add(wid)
-            if wid < len(ex.aspect_sent_labels):
-                asp_labels[i] = ex.aspect_sent_labels[wid]
-                cau_labels[i] = ex.cause_labels[wid]
+            if wid < len(ex.ate_labels):
+                ate_labels[i] = ex.ate_labels[wid]
+                sent_labels[i] = ex.sent_labels[wid]
+
         return {
             "input_ids": enc["input_ids"].squeeze(0),
             "attention_mask": enc["attention_mask"].squeeze(0),
-            "asp_labels": torch.tensor(asp_labels, dtype=torch.long),
-            "cause_labels": torch.tensor(cau_labels, dtype=torch.long),
+            "ate_labels": torch.tensor(ate_labels, dtype=torch.long),
+            "sent_labels": torch.tensor(sent_labels, dtype=torch.long),
         }
 
 
 def _word_ids_slow(tokenizer, words: list[str], max_len: int) -> list[int | None]:
-    """Manual word_ids() for slow tokenizers (PhoBERT often returns slow).
-
-    Tokenizes each word individually and records which output position maps
-    back to which word index. Mirrors what fast tokenizers expose via
-    `enc.word_ids()`. Pads/truncates to `max_len` with None for specials/pad.
-    """
+    """Manual word_ids() for slow tokenizers (PhoBERT often returns slow)."""
     cls = tokenizer.cls_token_id
     sep = tokenizer.sep_token_id
     out: list[int | None] = [None]  # CLS
@@ -142,116 +182,18 @@ def _word_ids_slow(tokenizer, words: list[str], max_len: int) -> list[int | None
         out.extend([w_idx] * len(toks))
     out.append(None)  # SEP
     while len(out) < max_len:
-        out.append(None)  # pad
+        out.append(None)
     return out[:max_len]
 
 
-def load_tagging_dataset(path: str | Path, tokenizer, max_len: int, segmenter_kind: str = "vncorenlp") -> TaggingDataset:
-    reviews = load_reviews(path)
+def load_tagging_dataset(
+    path: str | Path,
+    tokenizer,
+    max_len: int,
+    segmenter_kind: str = "vncorenlp",
+) -> TaggingDataset:
+    """Load JSONL data, segment, and build a TaggingDataset."""
+    reviews = load_absa_jsonl(path)
     segmenter = get_segmenter(segmenter_kind)
     examples = build_tagged_examples(reviews, segmenter)
     return TaggingDataset(examples, tokenizer, max_len=max_len)
-
-
-# ---------------------------------------------------------------------------
-# Action dataset (mT5)
-# ---------------------------------------------------------------------------
-
-ACTION_INPUT_TEMPLATE = (
-    "aspect: {aspect}\nsentiment: {sentiment}\ncause: {cause}\nreview: {review}"
-)
-
-
-@dataclass
-class ActionExample:
-    input_text: str
-    target_text: str
-
-
-def build_action_examples(
-    reviews: list[Review],
-    balance_sentiment: bool = False,
-) -> list[ActionExample]:
-    out: list[ActionExample] = []
-    for r in reviews:
-        for ann in r.annotations:
-            inp = ACTION_INPUT_TEMPLATE.format(
-                aspect=ann.aspect,
-                sentiment=ann.sentiment,
-                cause=ann.cause_text,
-                review=r.review,
-            )
-            out.append((ann.sentiment, ActionExample(inp, ann.action)))
-
-    if not balance_sentiment:
-        return [ex for _, ex in out]
-
-    # Balance by oversampling minority sentiments to match the majority class.
-    # Why: action vocabularies differ sharply across sentiments (positive ~ "Duy trì
-    # X", negative ~ "Cải thiện X"). When positives dominate, the first-token prior
-    # collapses to "Duy" regardless of the sentiment field in the prompt — this is
-    # exactly the failure we observed in the demo.
-    from collections import defaultdict
-    buckets: dict[str, list[ActionExample]] = defaultdict(list)
-    for sent, ex in out:
-        buckets[sent].append(ex)
-    target = max(len(v) for v in buckets.values())
-    balanced: list[ActionExample] = []
-    for sent, exs in buckets.items():
-        repeats, rem = divmod(target, len(exs))
-        balanced.extend(exs * repeats)
-        balanced.extend(exs[:rem])
-    return balanced
-
-
-class ActionDataset(Dataset):
-    def __init__(self, examples: list[ActionExample], tokenizer, max_input_len: int = 128, max_output_len: int = 32):
-        self.examples = examples
-        self.tokenizer = tokenizer
-        self.max_input_len = max_input_len
-        self.max_output_len = max_output_len
-
-    def __len__(self) -> int:
-        return len(self.examples)
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        ex = self.examples[idx]
-        enc = self.tokenizer(
-            ex.input_text,
-            truncation=True,
-            max_length=self.max_input_len,
-            padding="max_length",
-            return_tensors="pt",
-        )
-        with self.tokenizer.as_target_tokenizer() if hasattr(self.tokenizer, "as_target_tokenizer") else _noop():
-            tgt = self.tokenizer(
-                ex.target_text,
-                truncation=True,
-                max_length=self.max_output_len,
-                padding="max_length",
-                return_tensors="pt",
-            )
-        labels = tgt["input_ids"].squeeze(0).clone()
-        labels[labels == self.tokenizer.pad_token_id] = IGNORE_INDEX
-        return {
-            "input_ids": enc["input_ids"].squeeze(0),
-            "attention_mask": enc["attention_mask"].squeeze(0),
-            "labels": labels,
-        }
-
-
-class _noop:
-    def __enter__(self): return None
-    def __exit__(self, *a): return False
-
-
-def load_action_dataset(
-    path: str | Path,
-    tokenizer,
-    max_input_len: int,
-    max_output_len: int,
-    balance_sentiment: bool = False,
-) -> ActionDataset:
-    reviews = load_reviews(path)
-    examples = build_action_examples(reviews, balance_sentiment=balance_sentiment)
-    return ActionDataset(examples, tokenizer, max_input_len=max_input_len, max_output_len=max_output_len)

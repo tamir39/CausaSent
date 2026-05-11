@@ -3,21 +3,22 @@ model:
   dropout: 0.1
 
 data:
-  train_path: data/gold/train.json
-  val_path:   data/gold/val.json
-  test_path:  data/gold/test.json
+  train_path: data/processed/train.jsonl
+  val_path:   data/processed/val.jsonl
+  test_path:  data/processed/test.jsonl
   max_len: 128
   word_segmenter: vncorenlp   # vncorenlp | none
 
 train:
   lr: 2.0e-5
   batch_size: 16
-  epochs: 8
+  epochs: 10
   weight_decay: 0.01
   warmup_ratio: 0.1
   optimizer: adamw
-  class_weighting: none            # inverse_freq over-predicted rare classes (P<<R); disable for baseline
-  cause_loss_weight: 1.0           # multiplier on the cause head loss
+  class_weighting: inverse_freq  # O-label dominates, so weight by inverse freq
+  sent_loss_weight: 1.0          # multiplier on the sentiment head loss
+  contrastive_weight: 0.0        # set > 0 to enable contrastive loss (optional)
   grad_clip: 1.0
   seed: 42
 
