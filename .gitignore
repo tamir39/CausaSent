@@ -2,6 +2,8 @@
 CLAUDE.md
 PRD.md
 TASKS.md
+DECISIONS.md
+PLANNING.md
 
 # Python
 __pycache__/
@@ -16,9 +18,15 @@ venv/
 data/raw/*
 data/processed/*
 data/gold/*
+data/augmented/*
+data/interim/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/gold/.gitkeep
+!data/interim/.gitkeep
+
+# Public-dataset dumps (user-downloaded, license/ToS varies)
+dataset/
 
 checkpoints/
 outputs/
