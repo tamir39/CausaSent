@@ -60,18 +60,33 @@ class ActionRecommendation:
 
 # ---- Priority bucketing ------------------------------------------------------
 
-def _priority_for(asp: AspectSummary, sentiment: str) -> str:
-    """Bucket each (aspect, sentiment) cell into high/medium/low priority."""
+def _priority_for(asp: AspectSummary, sentiment: str, n_reviews: int = 1) -> str:
+    """Bucket each (aspect, sentiment) cell into high/medium/low priority.
+
+    Uses a continuous score that scales with batch size:
+      - For negative cells:  score = negative * negative_ratio
+        (penalises rare aspects with high neg-ratio that are likely noise,
+        rewards genuinely-dominant complaints)
+      - For positive cells:  score = positive * (1 - negative_ratio)
+        (genuine strength worth doubling down on)
+
+    Thresholds scale with `n_reviews` so the same batch ratios produce
+    consistent priorities regardless of whether you analysed 30 or 3,000
+    reviews — `max(absolute_floor, fraction_of_batch)` floor.
+    """
+    n = max(1, n_reviews)
     if sentiment == "negative":
-        if asp.negative_ratio >= 0.5 and asp.negative >= 5:
+        score = asp.negative * asp.negative_ratio
+        if score >= max(5.0, 0.05 * n):
             return "high"
-        if asp.negative >= 3:
+        if score >= max(2.0, 0.02 * n):
             return "medium"
         return "low"
     # positive
-    if asp.positive >= 10 and asp.negative_ratio < 0.2:
-        return "high"      # genuine strength worth doubling down on
-    if asp.positive >= 5:
+    score = asp.positive * max(0.0, 1.0 - asp.negative_ratio)
+    if score >= max(10.0, 0.10 * n):
+        return "high"
+    if score >= max(5.0, 0.05 * n):
         return "medium"
     return "low"
 
@@ -109,6 +124,7 @@ def _top_terms_str(asp: AspectSummary, sentiment: str, k: int = 3) -> tuple[str,
 def template_actions(summary: CorpusSummary) -> list[ActionRecommendation]:
     """Deterministic, no-API fallback that always works."""
     out: list[ActionRecommendation] = []
+    n_reviews = summary.n_reviews
     for asp in rank_by_priority(summary):
         for sentiment, cell in asp.cells.items():
             term_str, evidence = _top_terms_str(asp, sentiment)
@@ -118,7 +134,7 @@ def template_actions(summary: CorpusSummary) -> list[ActionRecommendation]:
                 ActionRecommendation(
                     aspect_category=asp.aspect_category,
                     sentiment=sentiment,
-                    priority=_priority_for(asp, sentiment),
+                    priority=_priority_for(asp, sentiment, n_reviews),
                     action=tmpl.format(term=term_str),
                     evidence_terms=evidence,
                 )

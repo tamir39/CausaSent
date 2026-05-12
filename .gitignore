@@ -21,6 +21,7 @@ venv/
 data/
 paper/
 report/
+scripts/build_report.py
 
 # Public-dataset dumps (user-downloaded, license/ToS varies)
 dataset/
