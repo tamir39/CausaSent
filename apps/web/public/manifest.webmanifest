@@ -1,0 +1,24 @@
+{
+  "name": "CausaSent — Vietnamese Review Analyzer",
+  "short_name": "CausaSent",
+  "description": "Aspect-based sentiment analysis + action recommendations for Vietnamese e-commerce reviews.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#f97316",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
