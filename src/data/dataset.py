@@ -76,14 +76,22 @@ def _build_word_labels(
 
 
 def load_absa_jsonl(path: str | Path) -> list[dict]:
-    """Load flat JSONL into grouped reviews.
+    """Load ABSA data into grouped reviews. Auto-detects format.
 
-    Each JSONL record has one annotation. Records with the same review id are
-    merged so downstream code sees: {id, review, annotations: [...]}.
+    Supports two formats:
+      1. Review-level JSON array — `[{id, review, annotations: [...]}, ...]`
+         (the canonical training format, written by build_ate_dataset.py)
+      2. Annotation-level JSONL — one annotation per line; records sharing a
+         review id are merged so downstream code sees `{id, review, annotations}`
+         (the intermediate draft format from auto-annotation)
     """
+    raw = Path(path).read_text(encoding="utf-8").lstrip("﻿").lstrip()
+    if raw.startswith("["):
+        return json.loads(raw)
+
     groups: dict[str, dict] = {}
     order: list[str] = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue

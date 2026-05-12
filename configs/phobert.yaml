@@ -3,22 +3,22 @@ model:
   dropout: 0.1
 
 data:
-  train_path: data/processed/train.jsonl
-  val_path:   data/processed/val.jsonl
-  test_path:  data/processed/test.jsonl
+  train_path: data/processed/ate/train.json
+  val_path:   data/processed/ate/val.json
+  test_path:  data/processed/ate/test.json
   max_len: 128
   word_segmenter: vncorenlp   # vncorenlp | none
 
 train:
   lr: 2.0e-5
   batch_size: 16
-  epochs: 10
+  epochs: 8
   weight_decay: 0.01
   warmup_ratio: 0.1
   optimizer: adamw
-  class_weighting: inverse_freq  # O-label dominates, so weight by inverse freq
+  class_weighting: inverse_freq  # O-label dominates + cells like packaging/positive are sparse
   sent_loss_weight: 1.0          # multiplier on the sentiment head loss
-  contrastive_weight: 0.0        # set > 0 to enable contrastive loss (optional)
+  contrastive_weight: 0.1        # supervised contrastive on B-token embeddings (groups by aspect_category)
   grad_clip: 1.0
   seed: 42
 
