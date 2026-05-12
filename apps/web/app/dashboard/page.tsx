@@ -6,6 +6,8 @@ import Link from "next/link";
 import { ActionCards } from "@/components/ActionCards";
 import { AspectBreakdown } from "@/components/AspectBreakdown";
 import { AspectRadar } from "@/components/AspectRadar";
+import { KpiStrip } from "@/components/KpiStrip";
+import { ReviewsTable, type ReviewRow } from "@/components/ReviewsTable";
 import { StreamProgress, type Stage } from "@/components/StreamProgress";
 import { TopPriorityHero } from "@/components/TopPriorityHero";
 import {
@@ -41,6 +43,7 @@ export default function DashboardPage() {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [partialSummary, setPartialSummary] = useState<CorpusSummary | null>(null);
   const [actions, setActions] = useState<ActionRecommendation[]>([]);
+  const [reviewRows, setReviewRows] = useState<ReviewRow[]>([]);
   const [recent, setRecent] = useState<{
     review: string;
     tuples: PredictedTuple[];
@@ -58,12 +61,23 @@ export default function DashboardPage() {
       setJob(pending);
       setStage("starting");
       setProgress({ done: 0, total: pending.reviews.length });
+      setReviewRows([]);
       runStream(pending);
       return;
     }
     const stored = loadResult();
-    if (stored) setResult(stored);
-    else setMissing(true);
+    if (stored) {
+      setResult(stored);
+      setReviewRows(
+        stored.per_review.map((r) => ({
+          id: r.id,
+          review: r.review,
+          tuples: r.tuples,
+        }))
+      );
+    } else {
+      setMissing(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -90,6 +104,10 @@ export default function DashboardPage() {
               perReview.push({ id: d.id, review: d.review, tuples: d.tuples });
               setProgress((p) => ({ ...p, done: d.idx + 1 }));
               setRecent({ review: d.review, tuples: d.tuples });
+              setReviewRows((prev) => [
+                ...prev,
+                { id: d.id, review: d.review, tuples: d.tuples },
+              ]);
               break;
             }
             case "summary": {
@@ -161,11 +179,6 @@ export default function DashboardPage() {
   const summary: CorpusSummary =
     partialSummary ?? result?.summary ?? EMPTY_SUMMARY;
   const live = stage != null && stage !== "done" && stage !== "error";
-
-  const negCount = summary.sentiment_overall.negative ?? 0;
-  const posCount = summary.sentiment_overall.positive ?? 0;
-  const total = negCount + posCount;
-  const negPct = total ? (100 * negCount) / total : 0;
 
   const sortedActions: ActionRecommendation[] = [...actions].sort(
     (a, b) =>
@@ -271,31 +284,28 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
-      {/* ============ KPI STRIP (live tick) ============ */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Reviews phân tích" value={progress.done || (result?.n_reviews ?? 0)} pulsing={live} />
-        <Stat
-          label="Có aspect"
-          value={summary.n_reviews_with_tuples}
-          sub={
-            progress.done
-              ? `${Math.round(
-                  (100 * summary.n_reviews_with_tuples) /
-                    Math.max(1, progress.done)
-                )}% coverage`
-              : undefined
-          }
-          pulsing={live}
-        />
-        <Stat label="Aspect tuples" value={summary.n_tuples} pulsing={live} />
-        <Stat
-          label="Tỷ lệ tiêu cực"
-          value={total ? `${negPct.toFixed(0)}%` : "—"}
-          tone={negPct > 50 ? "neg" : negPct > 30 ? "warn" : "pos"}
-          sub={total ? `${negCount} / ${total} tuples` : undefined}
-          pulsing={live}
-        />
-      </section>
+      {/* ============ KPI STRIP (compact horizontal) ============ */}
+      <KpiStrip
+        summary={summary}
+        reviewsProcessed={progress.done || (result?.n_reviews ?? 0)}
+        reviewsTotal={progress.total || (result?.n_reviews ?? 0)}
+        live={live}
+      />
+
+      {/* ============ REVIEWS TABLE ============ */}
+      {(reviewRows.length > 0 || progress.total > 0) && (
+        <section>
+          <div className="flex items-baseline justify-between mb-3">
+            <h3 className="text-[12px] font-semibold tracking-[0.04em] text-fg uppercase">
+              Reviews đã xử lý
+            </h3>
+            <span className="text-[10.5px] text-fg-faint">
+              click 1 dòng để xem toàn bộ tuples · search + filter có sẵn
+            </span>
+          </div>
+          <ReviewsTable rows={reviewRows} expectedTotal={progress.total} />
+        </section>
+      )}
 
       {/* ============ MAIN GRID ============ */}
       <section className="grid lg:grid-cols-[1.55fr_1fr] gap-6 items-start">
@@ -356,43 +366,3 @@ export default function DashboardPage() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  tone,
-  pulsing,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  tone?: "neg" | "warn" | "pos";
-  pulsing?: boolean;
-}) {
-  const valueColor =
-    tone === "neg"
-      ? "text-neg"
-      : tone === "warn"
-      ? "text-warn"
-      : tone === "pos"
-      ? "text-pos"
-      : "text-fg";
-  return (
-    <div className={`panel p-3.5 ${pulsing ? "ring-1 ring-brand-500/15" : ""}`}>
-      <div className="stat-label flex items-center gap-1.5">
-        {label}
-        {pulsing && (
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse" />
-        )}
-      </div>
-      <div
-        className={`mt-1.5 text-[24px] font-bold tracking-tight tabular-nums leading-none ${valueColor}`}
-      >
-        {value}
-      </div>
-      {sub && (
-        <div className="mt-1 text-[10.5px] text-fg-faint tabular-nums">{sub}</div>
-      )}
-    </div>
-  );
-}

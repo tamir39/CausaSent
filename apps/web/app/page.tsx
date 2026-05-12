@@ -14,6 +14,11 @@ Giá hơi cao so với chất lượng, nhưng màu sắc và kiểu dáng thì 
 Sản phẩm chất lượng tốt, giao hàng nhanh, giá hợp lý.
 Đóng gói cẩn thận, sản phẩm đẹp như hình, sẽ ủng hộ shop tiếp.`;
 
+// Hard cap to keep demo quota under control (Gemini RPM + GPU memory pressure
+// for very long batches). 200 ≈ 30s extract + 1 LLM call ≈ acceptable demo time.
+const MAX_REVIEWS = 200;
+const WARN_REVIEWS = 100;
+
 const ASPECTS = [
   "delivery",
   "packaging",
@@ -81,8 +86,6 @@ export default function HomePage() {
       let source: "paste" | "csv" = "paste";
       let csvFilename: string | undefined;
       if (file) {
-        // Parse CSV in-browser so the dashboard can stream review-by-review
-        // without an extra round-trip to /analyze-csv.
         const text = await file.text();
         reviews = await parseCsvReviews(text);
         source = "csv";
@@ -92,6 +95,17 @@ export default function HomePage() {
       } else {
         reviews = text.split("\n").map((r) => r.trim()).filter(Boolean);
         if (reviews.length === 0) throw new Error("Cần ít nhất 1 review.");
+      }
+
+      if (reviews.length > MAX_REVIEWS) {
+        const truncated = reviews.length - MAX_REVIEWS;
+        reviews = reviews.slice(0, MAX_REVIEWS);
+        // Show a non-blocking warning above the button; still proceed.
+        setError(
+          `Demo giới hạn ${MAX_REVIEWS} reviews / lần để tránh tốn quota Gemini và RAM. ` +
+            `Đã cắt ${truncated} dòng cuối; phân tích ${reviews.length} reviews đầu.`
+        );
+        await new Promise((r) => setTimeout(r, 1200));
       }
 
       if (!backendReady) {
@@ -346,6 +360,29 @@ export default function HomePage() {
             </div>
           )}
 
+          {/* upload limit indicator — only show when over warn threshold */}
+          {!file && reviewLines > WARN_REVIEWS && (
+            <div
+              className={`text-[10.5px] tabular-nums flex items-center justify-between ${
+                reviewLines > MAX_REVIEWS ? "text-neg" : "text-warn"
+              }`}
+            >
+              <span>
+                {reviewLines > MAX_REVIEWS
+                  ? `${reviewLines} reviews — quá giới hạn demo ${MAX_REVIEWS}, sẽ cắt còn ${MAX_REVIEWS}`
+                  : `${reviewLines}/${MAX_REVIEWS} reviews — gần giới hạn demo`}
+              </span>
+              <div className="ml-2 w-24 h-1 rounded-full bg-bg-subtle overflow-hidden">
+                <div
+                  className={reviewLines > MAX_REVIEWS ? "bg-neg h-full" : "bg-warn h-full"}
+                  style={{
+                    width: `${Math.min(100, (100 * reviewLines) / MAX_REVIEWS)}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           <button onClick={handleAnalyze} disabled={busy || !backendReady} className="btn-primary w-full">
             {busy ? (
               <>
@@ -356,7 +393,9 @@ export default function HomePage() {
               <>
                 Phân tích →{" "}
                 <span className="opacity-70">
-                  {file ? "(CSV)" : `${reviewLines || "?"} reviews`}
+                  {file
+                    ? "(CSV)"
+                    : `${Math.min(reviewLines, MAX_REVIEWS) || "?"} reviews`}
                 </span>
               </>
             )}

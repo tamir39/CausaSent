@@ -72,7 +72,9 @@ def _get_pipeline() -> CausaSentPipeline:
 # ---- Pydantic schemas --------------------------------------------------------
 
 class AnalyzeRequest(BaseModel):
-    reviews: list[str] = Field(..., min_length=1, max_length=10000)
+    # Cap matches the frontend MAX_REVIEWS so an oversized POST is rejected
+    # at the boundary instead of OOMing the GPU or burning LLM quota.
+    reviews: list[str] = Field(..., min_length=1, max_length=200)
     use_llm: bool = True
     top_k: int = 5
     min_confidence: float = 0.0
