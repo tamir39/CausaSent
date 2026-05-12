@@ -2,7 +2,7 @@
 license: cc-by-sa-4.0
 task_categories:
   - token-classification
-  - text2text-generation
+  - text-generation
 language:
   - vi
 size_categories:
